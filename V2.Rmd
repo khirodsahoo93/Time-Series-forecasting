@@ -1,0 +1,465 @@
+---
+title: "Final project report"
+output:
+  pdf_document: default
+  html_document: default
+---
+## Initial Project Report
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(astsa)
+library(forecast)
+library(tseries)
+library(ggfortify)
+```
+
+
+## 1. Introduction (5 points) – Text may be re-used from the proposal 
+### a. Context and background 
+This is a trend analysis of flight, passenger, load factor and operating revenue data of USA domestic airlines.
+I was always interested in studying airline industry as airline has always been a struggling
+industry in terms of revenue because they depend a lot on uncertain and uncontrollable factors
+like jetline fuel prices, load factor, climatic conditions and a stiff competition. So, I wanted to do
+some trend analysis with airline data.
+
+### b. Goals of the project 
+Forecasting the number of flights, load_factor, passengers and operating revenue of domestic airlines in USA.
+I. The forecast of the number of passengers and load factor can be useful for the
+carriers to plan the number of flights they need to operate to cater to the demand.
+II. For passengers, it can be useful in planning their booking beforehand if they
+know how many flights are going to operate in the coming months and what is
+the load factor and they whether should wait till the last moment to book the
+flights.
+For example- during peak seasons, flights generally get booked very soon and if
+the forecast says for a particular season in the year, the number of operating
+flights is going to be reduced, they need to be wary of this and plan beforehand.
+From a passenger perspective, a more useful forecast would be the forecast of
+fare, the proportion of canceled flights. If I find that data, I will try to use it in the
+project.
+III. We can understand the relationship between the number of flights operating and
+the number of passengers. If a significant increase in the number of passengers
+is not followed by a significant increase in flights, it means that a lot of previous
+flights were not getting fully booked, and hence the operating revenue would also
+be lower or it could simply mean that the load factor has improved.
+
+### c. Data description: sources of data, time period(s) represented 
+  ![data summary](table1.png)
+  
+For 3 datasets, the data was on monthly level. So I rolled it up on quarterly level and all my analysis are based on     quarterly data.
+  
+## 2. Exploratory analysis (10 points) - For each time series: 
+
+
+```{r read csv}
+library(tidyverse)
+flight <- read.csv('Flight.csv')
+passengers <- read.csv('Passengers.csv')
+load_factor <- read.csv('Load factor.csv')
+op_rev <- read.csv('Operating Rev.csv')
+head(flight)
+
+head(passengers)
+head(load_factor)
+head(op_rev)
+```
+```{r}
+
+plot(ts(flight$DOMESTIC,freq=12,start = c(2002,10)))
+
+```
+
+Data Cleaning
+
+```{r}
+flight$Day <- 01
+flight$Date<-as.Date(with(flight,paste(Year,Month,Day,sep="-")),"%Y-%m-%d")
+flight$qtr<-substr(quarters(as.Date(flight$Date)), 2, 2)
+passengers$Day <- 01
+passengers$Date<-as.Date(with(passengers,paste(Year,Month,Day,sep="-")),"%Y-%m-%d")
+passengers$qtr<-substr(quarters(as.Date(passengers$Date)), 2, 2)
+load_factor$Day <- 01
+load_factor$Date<-as.Date(with(load_factor,paste(Year,Month,Day,sep="-")),"%Y-%m-%d")
+load_factor$qtr<-substr(quarters(as.Date(load_factor$Date)), 2, 2)
+```
+
+Converting to Time series object
+
+```{r}
+freq <- 12
+nfreq <- 4
+flight_ts = ts(flight$DOMESTIC, freq = freq, start = c(2002,10),end=c(2019,12))
+flight_ts <- aggregate(flight_ts, nfrequency=nfreq,mean)
+start(flight_ts)
+end(flight_ts)
+passengers_ts = ts(passengers$DOMESTIC, freq = freq, start = c(2002,10),end=c(2019,12))
+passengers_ts <- aggregate(passengers_ts, nfrequency=nfreq,mean)
+start(passengers_ts)
+end(passengers_ts)
+load_factor_ts = ts(load_factor$DOMESTIC, freq = freq, start = c(2002,10),end=c(2019,12))
+load_factor_ts <- aggregate(load_factor_ts, nfrequency=nfreq,mean)
+start(load_factor_ts)
+end(load_factor_ts)
+op_rev_ts = ts(op_rev$DOMESTIC, freq = 4, start = c(2000,01),end=c(2019,12))
+op_rev_ts=window(op_rev_ts, start=c(2002, 04), end=c(2019,04)) 
+start(op_rev_ts)
+end(op_rev_ts)
+
+```
+###   a. Plot the series 
+
+```{r}
+par(mfcol=c(2,2))
+plot(flight_ts, col="blue", lwd=2, ylab="DOMESTIC flights", main="Quarterly Number of domestic flights") 
+plot(passengers_ts, col="red", lwd=2, ylab="DOMESTIC passengers", main="Quarterly Number of passengers in domestic flights") 
+plot(load_factor_ts, col="green", lwd=2, ylab="DOMESTIC load factor", main="Quarterly  load factor of domestic flights") 
+plot(op_rev_ts, col="yellow", lwd=2, ylab="DOMESTIC operating revenue", main="Quarterly operating revenue of domestic flights") 
+```
+## b. Describe the following: 
+
+###  i. Missing or unusual values 
+
+There are no missing values in the data
+
+### ii. Changes in the series pattern
+
+All the 4 time series seem to have seasonal components. And as it was observed in the flight time series, the series has a huge dip around the year 2020 which could be possibly due to covid. So, I excluded the covid period from my analysis so that the forecast is not affected.
+
+
+Defined functions for stationarity tests, decomposition, plotting differenced series and seasonally adjust series
+
+Stationarity tests
+
+```{r}
+stationarity.test <- function(data,lag.length=25){
+a<-Box.test(data, lag=lag.length, type="Ljung-Box") # test stationary signal
+b<-kpss.test(data, null="Trend")
+options(warn=-1)
+c<-adf.test(data)
+print(a)
+print(b)
+print(c)
+if(b$p.value > 0.05)
+  {
+  cat('Series is stationary\n\n\n\n')
+} 
+else{ cat('Series is not stationary\n\n\n\n')}
+}
+
+```
+
+Decomposition
+
+```{r}
+decomposition <- function(data){
+fit <- stl(data, s.window = "periodic")
+autoplot(fit, ts.colour = 'blue')}
+```
+
+Seasonally adjust data
+
+```{r}
+adjust.seasonality <- function(data){
+data_decompose <- decompose(data)
+plot(data_decompose)
+data_SA <- data - data_decompose$seasonal
+return(data_SA)
+}
+
+```
+
+
+```{r}
+library(ggplot2)
+
+plot.diff <- function(data,lag,difference,s_lag,s_diff,title)
+  {
+  cbind("seasonal lag+ extra " = diff(diff(data,lag=s_lag,differences=s_diff),lag=lag,differences=difference),
+        "only seasonal lag" = diff(data,lag=s_lag,differences=s_lag)) %>%
+  autoplot(facets=TRUE) +
+    xlab("Year") + ylab("") +ggtitle(title)
+  #return(diff(data,lag=lag,differences=difference))
+}
+```
+
+
+Since series are both seasonal and have trends, we need to perform differencing to remove trend and seasonality and then check the ACF to deduce the parameters.
+
+### c. Evaluate stationarity using a hypothesis test (R REQUIRED)
+```{r}
+cat('Stationarity tests for flight data\n')
+stationarity.test(flight_ts)
+cat('Stationarity tests for passenger data\n')
+stationarity.test(passengers_ts)
+cat('Stationarity tests for load factor data\n')
+stationarity.test(load_factor_ts)
+cat('Stationarity tests for operating revenue data\n')
+stationarity.test(op_rev_ts)
+
+
+```
+As it can be seen from the stationarity tests and also from the plots of the respective series, all the series are non-stationary.
+
+
+
+### d. Investigate seasonality using decomposition and/or spectral analysis
+
+```{r}
+decomposition(flight_ts)
+```
+
+
+```{r}
+decomposition(passengers_ts)
+```
+
+
+```{r}
+decomposition(load_factor_ts)
+```
+
+
+```{r}
+decomposition(op_rev_ts)
+
+
+```
+### Performing differencing
+
+```{r}
+plot.diff(flight_ts,4,1,1,1,'flight')
+
+```
+```{r}
+plot.diff(passengers_ts,4,1,1,1,'passengers')
+```
+
+
+```{r}
+plot.diff(load_factor_ts,4,1,1,1,'load_factor')
+```
+
+
+```{r}
+plot.diff(op_rev_ts,4,1,1,1,'operating revenue')
+```
+Stationarity check
+```{r}
+cat('Stationarity tests for flight data\n')
+stationarity.test(diff(diff(flight_ts,4,1),1,1))
+cat('Stationarity tests for passenger data\n')
+stationarity.test(diff(diff(passengers_ts,4,1),1,1))
+cat('Stationarity tests for load factor data\n')
+stationarity.test(diff(load_factor_ts,4,1))
+cat('Stationarity tests for operating revenue data\n')
+stationarity.test(diff(op_rev_ts,4,1))
+
+```
+After few trials, different differencing terms were identified to make the respective series stationary. Although the results of Box-Ljung,KPSS and ADF tests were displayed above, the decision of stationarity was made from KPSS results.
+First, seasonal differencing was performed to check if the series has become stationary. If not, further lag differences were performed until the series become stationary.
+
+### e. ACF/PACF
+
+ACF and PACF for flight data
+
+```{r}
+acf2(diff(diff(flight_ts,4,1),1,1))
+```
+The is one spike in the beginning of the ACF and PACF plots. So, an AR(1) MA(1)  model can be used for the non seasonal term. For the seasonal term, The PACF has 2 significant spikes and then the correlation values decreases continuously. Whereas in ACF chart, there are multiple significant spikes. Hence, an AR(2) model for the seasonal term can used here.
+
+ACF plots were plotted below after correct differencing was done.
+
+ACF and PACF for passenger data
+
+```{r}
+acf2(diff(diff(passengers_ts,lag=4,differences=1),lag=1,differences=1),max.lag=24)
+```
+ACF and PACF for load factor data
+
+```{r}
+acf2(diff(load_factor_ts,lag=4,differences=1),max.lag=24)
+```
+ACF and PACF for operating revenue data
+
+```{r}
+acf2(diff(op_rev_ts,lag=4,differences=1),max.lag=24)
+
+```
+
+
+
+## 3. ARIMA modeling
+
+###  a. Fit at least one ARIMA model for each series 
+
+Sarima for flight data
+```{r}
+sarima(flight_ts,1,1,1,2,1,1,4)
+```
+```{r}
+sarima(passengers_ts,0,1,0,0,1,1,4)
+```
+```{r}
+sarima(passengers_ts,0,1,1,0,1,1,4)
+```
+
+
+```{r}
+auto.arima(op_rev_ts,seasonal=TRUE,trace=TRUE)
+```
+
+
+```{r}
+sarima(load_factor_ts,1,0,3,1,1,1,4)
+```
+```{r}
+sarima(load_factor_ts,1,1,2,1,1,1,4)
+```
+
+
+```{r}
+sarima(op_rev_ts,2,0,2,0,1,0,4)
+```
+
+
+### c. Evaluate fit of all models generated
+
+After differencing acf of all the series were evaluated and the parameters were estimated. 
+For flight series, with parameters p=1,d=1,q=1,P=2,D=1,Q=1, AIC was 1371.23.
+From the results, we saw that the ar1, ma1,sma1 terms are not significant.
+
+For passenger series, with parameters p=0,d=1,q=0,P=0,D=1,Q=1, AIC was 1974.21.
+For this model sma1 term is significant which is the only term in the model. This model is very close to box-jenkins airplane model for passengers.
+I tried the box=jenkins model as well. The residual plots of this model were very similar to my model. However, the extra ma1 term is not significant.
+
+For load factor series, with parameters p=1,d=0,q=3,P=1,D=1,Q=1, AIC was 185.73.
+From the results, we saw that the ma2,ma3 and sar1 terms are not significant.
+
+For operating revenue series, with parameters p=2,d=0,q=2,P=0,D=1,Q=0, AIC was 1990.34.
+From the results, we saw that the ma1 and ma2 terms are not significant.
+
+Since, there are insignificant terms in my models, we can try reducing few terms and check the residuals again.
+
+With some trials,I found that for load factor series,with p=0,d=1,q=1 and P=0,D=1,Q=1, the residuals plots were significant and we will use that.
+
+I found that for operating revenue series, with p=2,d=0,q=0 and P=0,D=1,Q=0, the residuals plots were significant and we will use that. Also, there are no insignificant terms.
+
+I found that for flight series, with p=1,d=1,q=0 and P=2,D=1,Q=1, the residuals plots were significant and we will use that. Also, now all the terms are significant.
+
+Please find the new model and their residual plots below:
+```{r}
+sarima(flight_ts,1,1,0,2,1,0,4)
+
+```
+```{r}
+sarima(load_factor_ts,0,1,1,0,1,1,4)
+```
+```{r}
+sarima(op_rev_ts,2,0,0,0,1,0,4)
+```
+
+
+## 4. Additional analysis (15 points) – Include at least one of the following:
+
+### a. Forecasts from one or more series, including prediction intervals and evaluations of accuracy
+
+Forecast for flight data
+
+```{r}
+flight_train = window(flight_ts, end = c(2010, 3))
+flight_test = window(flight_ts, start = c(2010, 4))
+cc_flight= sarima(flight_train, 1,1,0,2,1,0,4)
+cc_flight_for = sarima.for(flight_train, n.ahead = 16,1,1,0,2,1,0,4)
+
+lines(flight_test, type='o')
+cc_flight_for$pred
+cc_flight_for$se
+accuracy(cc_flight_for$pred, flight_test)
+```
+               ME     RMSE      MAE      MPE     MAPE      ACF1 Theil's U
+Test set 31195.21 36905.81 34058.35 4.462302 4.870712 0.6617276 0.9816788
+
+
+Forecast for passenger data
+
+```{r}
+passenger_train = window(passengers_ts, end = c(2010, 3))
+passenger_test = window(passengers_ts, start = c(2010, 4))
+cc_passenger = sarima(passenger_train, 0,1,0,0,1,1,4)
+cc_passenger_for = sarima.for(passenger_train, n.ahead = 16,0,1,0,0,1,1,4)
+
+lines(passenger_test, type='o')
+cc_passenger_for$pred
+cc_passenger_for$se
+accuracy(cc_passenger_for$pred, passenger_test)
+```
+              ME    RMSE     MAE      MPE     MAPE      ACF1 Theil's U
+Test set 1360008 1564227 1366996 2.520655 2.535053 0.5256521 0.3733236
+
+Forecast for load factor data
+
+```{r}
+loadfactor_train = window(load_factor_ts, end = c(2010, 3))
+loadfactor_test = window(load_factor_ts, start = c(2010, 4))
+cc_load = sarima(loadfactor_train, 0,1,1,0,1,1,4)
+cc_load_for = sarima.for(loadfactor_train, n.ahead = 13,0,1,1,0,1,1,4)
+
+lines(loadfactor_test, type='o')
+loadfactor_test
+cc_load_for$pred
+cc_load_for$se
+accuracy(cc_load_for$pred, loadfactor_test)
+```
+                ME     RMSE      MAE       MPE     MAPE      ACF1 Theil's U
+Test set -1.105081 1.721169 1.356825 -1.312091 1.618885 0.4764248 0.6524814
+
+Forecast for operating revenue data
+
+```{r}
+op_rev_train = window(op_rev_ts, end = c(2010, 3))
+op_rev_test = window(op_rev_ts, start = c(2010, 4))
+cc_op_re = sarima(op_rev_train, 2,0,0,0,1,0,4)
+cc_op_re_for = sarima.for(op_rev_train, n.ahead = 13,2,0,0,0,1,0,4)
+
+lines(op_rev_test, type='o')
+op_rev_test
+cc_op_re_for$pred
+cc_op_re_for$se
+accuracy(cc_op_re_for$pred, op_rev_test)
+```
+              ME    RMSE     MAE      MPE     MAPE      ACF1 Theil's U
+Test set 2341759 2527950 2343128 6.886783 6.891337 0.2830676  1.333473
+
+## 5. Summary and implications
+
+
+There were both seasonal and trend components in all the time series analysed here. Some of the series became stationary after just differencing the seasonal term. However, some series required additional differencing to make the series stationary. 
+
+After many trials, best model parameters were determined and were used for forcasting.
+
+Conclusion:
+  
+1. After analyzing the trend components of each series, I found that the number of passengers, load factor and operating revenue increase over the time. However, the number flights has a decreasing trend.Let's break it down a bit.
+  
+### Period till 2010:
+  i. The flights series has a decreasing trend.
+  ii.The number of passengers are fairly constant over the time or we can say the series has a slightly increasing trend.
+  iii. The load factor exhibits a strong increasing trend.
+  iv. The operating revenue also increases over the time.
+  
+This proves our initial hypothesis that if increase in passengers is not followed by increase in number of flights and the operating revenue still increases over time it means that load factor must have improved. The airline services did not need to operate more number of flights as less people were travelling earlier. But as more people started travelling later, more seats were booked and increased the load factor. So even with less flights, the operating revenue increased. 
+But we cannot correlate load factor with revenue as we know that the airline ticket prices also increased over the time which would be another important factor for increase in revenue apart from other factors.
+
+
+
+### Period from 2011:
+  i. The flights series has a slight decreasing trend initially but later increases.
+  ii.The number of passengers exhibits a strong increasing trend.
+  iii. The load factor exhibits a fairly constant trend.
+  iv. The operating revenue also increases over the time.
+  
+Now, this tells us a different story. As we hypothesized, number of flights increases as more and more people start travelling. This makes sense, as after a certain time, the load factor would saturate and in order to increase revenue, airline services need to operate more flights for growing number of people. Now, obviously they can keep increasing prices keeping the number of flights same but this is not a viable option and this defeats the whole purpose of the airline services if they only let rich people to travel.
+
+The saturation of the load factor is also evident in the trend plots.
+
+2. All the series have a seasonal components confirming what we have experienced ourselves. Some months or quarters see more flights getting booked or flights being overbooked. The final models used for forecasting yielded good results and the MAPE of all the models were low.
+
